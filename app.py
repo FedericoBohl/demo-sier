@@ -302,7 +302,7 @@ def render_graph_tabs(world: Dict[str, Any], *, default_country_name: str | None
             title="Apoyo político por país",
         )
         fig.update_layout(legend_title_text="País")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with tab2:
         selected = st.selectbox(
@@ -334,7 +334,7 @@ def render_graph_tabs(world: Dict[str, Any], *, default_country_name: str | None
             labels={"period": "Período", "Participación": "% del total bruto C+G+X+M"},
         )
         fig.update_layout(barmode="stack")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("Las importaciones se muestran en términos brutos para que cada barra sume 100%.")
 
     with tab3:
@@ -365,7 +365,7 @@ def render_graph_tabs(world: Dict[str, Any], *, default_country_name: str | None
             title=f"Variación porcentual respecto del período anterior – {selected}",
             labels={"period": "Período"},
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with tab4:
         selected = st.selectbox(
@@ -391,7 +391,7 @@ def render_graph_tabs(world: Dict[str, Any], *, default_country_name: str | None
             labels={"period": "Período", "Participación": "% del empleo total"},
         )
         fig.update_layout(barmode="stack")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with tab5:
         fig = px.line(
@@ -403,7 +403,7 @@ def render_graph_tabs(world: Dict[str, Any], *, default_country_name: str | None
             labels={"period": "Período", "real_fx_index": "Índice de tipo de cambio real", "country": "País"},
             title="Tipo de cambio real promedio por país (base 100 = equilibrio)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 
@@ -467,7 +467,7 @@ def login_screen() -> None:
         with st.form("login_form", clear_on_submit=False):
             username = st.text_input("Usuario")
             password = st.text_input("Contraseña", type="password")
-            submitted = st.form_submit_button("Ingresar", use_container_width=True)
+            submitted = st.form_submit_button("Ingresar", width="stretch")
             if submitted:
                 user = authenticate_user(username, password)
                 if user is None:
@@ -596,7 +596,7 @@ def world_creation_panel() -> None:
                 }
             )
 
-        create_clicked = st.form_submit_button("Crear / reiniciar mundo", use_container_width=True)
+        create_clicked = st.form_submit_button("Crear / reiniciar mundo", width="stretch")
         if create_clicked:
             durations = parse_period_durations(duration_schedule_text, int(total_periods), int(duration))
             settings = base_settings
@@ -670,14 +670,14 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
     with c4:
         st.metric("Estado", str(world["status"]))
     with c5:
-        if st.button("Refrescar panel", use_container_width=True):
+        if st.button("Refrescar panel", width="stretch"):
             st.rerun()
 
     render_countdown(world)
 
     b1, b2 = st.columns([1, 1])
     with b1:
-        if st.button("Terminar período ahora", use_container_width=True, disabled=world["status"] != "running"):
+        if st.button("Terminar período ahora", width="stretch", disabled=world["status"] != "running"):
             if force_finalize(int(world["id"])):
                 st.success("Período cerrado y mundo actualizado.")
                 st.rerun()
@@ -691,12 +691,12 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
         )
 
     st.markdown("### Estado actual de todos los países")
-    st.dataframe(build_current_state_df(world), use_container_width=True, hide_index=True)
+    st.dataframe(build_current_state_df(world), width="stretch", hide_index=True)
 
     st.markdown("### Estado de envíos del período")
     st.dataframe(
         pd.DataFrame(period_submission_status(int(world["id"]), int(world["current_period"]))),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -746,7 +746,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
                 "Aranceles efectivos": effective_tariffs_txt,
             }
         )
-    st.dataframe(pd.DataFrame(live_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(live_rows), width="stretch", hide_index=True)
 
     with st.expander("Editar parámetros del mundo activo"):
         settings = world["settings"]
@@ -771,7 +771,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
                 settings["engine"]["inflation_demand_coeff"] = st.number_input("Inflación por gasto", value=float(settings["engine"]["inflation_demand_coeff"]), step=0.01, format="%.2f")
                 settings["engine"]["export_q_coeff"] = st.number_input("Exportaciones por competitividad", value=float(settings["engine"]["export_q_coeff"]), step=0.01, format="%.2f")
                 settings["engine"]["unemployment_activity_coeff"] = st.number_input("Desempleo por actividad", value=float(settings["engine"]["unemployment_activity_coeff"]), step=0.01, format="%.2f")
-            saved = st.form_submit_button("Guardar parámetros", use_container_width=True)
+            saved = st.form_submit_button("Guardar parámetros", width="stretch")
             if saved:
                 durations = parse_period_durations(durations_text, int(new_total_periods), int(world["period_duration_minutes"]))
                 settings["period_durations"] = durations
@@ -819,7 +819,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
                     key=f"admin_tariff_{selected_country_id}_{c['id']}"
                 )
 
-            save_override = st.form_submit_button("Guardar shock oculto del administrador", use_container_width=True)
+            save_override = st.form_submit_button("Guardar shock oculto del administrador", width="stretch")
             if save_override:
                 final_vat = float(states := get_current_states(int(world["id"]))[selected_country_id]["vat_rate"]) + float(vat_delta)
                 invalid = False
@@ -850,12 +850,12 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
 
         cols = st.columns([1, 1, 1])
         with cols[0]:
-            if st.button("Eliminar envío del jugador", use_container_width=True):
+            if st.button("Eliminar envío del jugador", width="stretch"):
                 clear_submission(int(world["id"]), int(world["current_period"]), selected_country_id)
                 st.success("Envío del jugador eliminado.")
                 st.rerun()
         with cols[1]:
-            if st.button("Eliminar shock oculto", use_container_width=True):
+            if st.button("Eliminar shock oculto", width="stretch"):
                 clear_admin_override(int(world["id"]), int(world["current_period"]), selected_country_id)
                 st.success("Shock oculto eliminado.")
                 st.rerun()
@@ -864,7 +864,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
             required_now = states[selected_country_id]["required_gov_delta_next"]
             force_red = st.button(
                 "Imponer recorte obligatorio de gasto en próxima ronda",
-                use_container_width=True,
+                width="stretch",
             )
             if force_red:
                 cut = world["settings"]["thresholds"]["red_spending_cut_required"]
@@ -878,7 +878,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
         max_period = visible_history_limit(world, "admin")
         policies = get_past_policy_table(int(world["id"]), max_period=max_period)
         if policies:
-            st.dataframe(pd.DataFrame(policies), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(policies), width="stretch", hide_index=True)
         else:
             st.info("Todavía no hay políticas enviadas.")
 
@@ -899,7 +899,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
                         "Política": r["applied_policy"],
                     }
                 )
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         else:
             st.info("Aún no hay resultados guardados.")
 
@@ -942,11 +942,11 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
         req_cut = my_state["required_gov_delta_next"]
         st.metric("Recorte obligatorio próximo", "No" if req_cut is None else f"Sí ({req_cut}%)")
     with top5:
-        if st.button("Refrescar vista", use_container_width=True):
+        if st.button("Refrescar vista", width="stretch"):
             st.rerun()
 
     st.markdown("### Estado actual")
-    st.dataframe(build_current_state_df(world), use_container_width=True, hide_index=True)
+    st.dataframe(build_current_state_df(world), width="stretch", hide_index=True)
 
     st.markdown("### Matriz actual de aranceles")
     tariff_rows = []
@@ -957,12 +957,12 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
                 continue
             row[c_to["name"]] = float(tariffs.get(int(c_from["id"]), {}).get(int(c_to["id"]), 0.0))
         tariff_rows.append(row)
-    st.dataframe(pd.DataFrame(tariff_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(tariff_rows), width="stretch", hide_index=True)
 
     st.markdown("### Historial de políticas pasadas")
     policies = get_past_policy_table(int(world["id"]), max_period=visible_history_limit(world, user["role"]))
     if policies:
-        st.dataframe(pd.DataFrame(policies), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(policies), width="stretch", hide_index=True)
     else:
         st.info("Todavía no hay historial de políticas.")
 
@@ -970,7 +970,7 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
         st.markdown("### Estado de envíos del período")
         st.dataframe(
             pd.DataFrame(period_submission_status(int(world["id"]), int(world["current_period"]))),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -980,7 +980,7 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
     if world["status"] == "finished":
         st.success("La partida terminó.")
         st.markdown("### Ranking final")
-        st.dataframe(ranking_df(world), use_container_width=True, hide_index=True)
+        st.dataframe(ranking_df(world), width="stretch", hide_index=True)
         return
 
     if user["role"] != "country_leader":
@@ -1004,14 +1004,14 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
                 "Variación del tipo de cambio (%)",
                 min_value=-float(limits["fx_delta_abs"]),
                 max_value=float(limits["fx_delta_abs"]),
-                value=float(existing_override.get("fx_delta", 0.0)),
+                value=float(existing.get("fx_delta", 0.0)),
                 step=0.5,
             )
             gov_delta = st.number_input(
                 "Variación del gasto estatal (%)",
                 min_value=-float(limits["gov_delta_abs"]),
                 max_value=float(limits["gov_delta_abs"]),
-                value=float(existing_override.get("gov_delta", 0.0)),
+                value=float(existing.get("gov_delta", 0.0)),
                 step=0.5,
             )
         with col2:
@@ -1019,19 +1019,19 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
                 "Cambio del IVA (pp)",
                 min_value=-float(limits["vat_delta_abs"]),
                 max_value=float(limits["vat_delta_abs"]),
-                value=float(existing_override.get("vat_delta", 0.0)),
+                value=float(existing.get("vat_delta", 0.0)),
                 step=0.5,
             )
             public_emp_delta = st.number_input(
                 "Variación del empleo público (%)",
                 min_value=-float(limits["public_emp_delta_abs"]),
                 max_value=float(limits["public_emp_delta_abs"]),
-                value=float(existing_override.get("public_emp_delta", 0.0)),
+                value=float(existing.get("public_emp_delta", 0.0)),
                 step=1.0,
             )
 
         st.markdown("#### Cambios de aranceles por socio")
-        tariff_changes_existing = existing_override.get("tariff_changes", {})
+        tariff_changes_existing = existing.get("tariff_changes", {})
         tariff_changes: Dict[int, float] = {}
         for c in countries:
             partner_id = int(c["id"])
@@ -1047,7 +1047,7 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
                 key=f"country_tariff_{country_id}_{partner_id}",
             )
 
-        submitted = st.form_submit_button("Enviar políticas", use_container_width=True)
+        submitted = st.form_submit_button("Enviar políticas", width="stretch")
         if submitted:
             invalid = False
             if my_state["required_gov_delta_next"] is not None and float(gov_delta) > float(my_state["required_gov_delta_next"]):
@@ -1085,7 +1085,7 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
                 st.rerun()
 
     if existing:
-        if st.button("Eliminar mi envío actual", use_container_width=True):
+        if st.button("Eliminar mi envío actual", width="stretch"):
             clear_submission(int(world["id"]), int(world["current_period"]), country_id)
             st.success("Envío eliminado.")
             st.rerun()
@@ -1101,7 +1101,7 @@ def sidebar_shell() -> Dict[str, Any] | None:
         if user:
             st.write(f"**Usuario:** {user['username']}")
             st.write(f"**Rol:** {user['role']}")
-        if st.button("Cerrar sesión", use_container_width=True):
+        if st.button("Cerrar sesión", width="stretch"):
             st.session_state.auth_user = None
             st.rerun()
 
