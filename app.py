@@ -10,10 +10,13 @@ import streamlit as st
 from game_engine import default_settings
 from storage import (
     authenticate_user,
+    clear_admin_override,
     clear_submission,
+    combine_declared_and_override,
     create_world,
     force_finalize,
     get_active_world,
+    get_admin_overrides_for_period,
     get_countries,
     get_current_states,
     get_past_policy_table,
@@ -25,6 +28,7 @@ from storage import (
     maybe_auto_finalize,
     period_submission_status,
     update_world_settings,
+    upsert_admin_override,
     upsert_submission,
 )
 
@@ -662,7 +666,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
     with c2:
         st.metric("Total de períodos", str(world["total_periods"]))
     with c3:
-        st.metric("Duración período actual", str(world["period_duration_minutes"]))
+        st.metric("Duración período actual (min)", str(world["period_duration_minutes"]))
     with c4:
         st.metric("Estado", str(world["status"]))
     with c5:
@@ -696,36 +700,52 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
         hide_index=True,
     )
 
-    st.markdown("### Políticas ya enviadas del período actual (tiempo real)")
+    st.markdown("### Políticas del período actual en tiempo real")
     current_submission = get_submissions_for_period(int(world["id"]), int(world["current_period"]))
+    current_overrides = get_admin_overrides_for_period(int(world["id"]), int(world["current_period"]))
     country_map = {int(c["id"]): c["name"] for c in get_countries(int(world["id"]))}
     live_rows: List[Dict[str, Any]] = []
     status_rows = {
         int(r["country_id"]): r for r in period_submission_status(int(world["id"]), int(world["current_period"]))
     }
+    states_now = get_current_states(int(world["id"]))
     for cid, name in country_map.items():
         item = current_submission.get(cid)
-        if item is None:
-            live_rows.append({"País": name, "Enviado": "No", "Detalle": "Sin envío"})
-        else:
-            tariffs_txt = ", ".join(
-                f"{country_map.get(int(k), k)}: {float(v):+.1f} pp"
-                for k, v in item.get("tariff_changes", {}).items()
-                if abs(float(v)) > 1e-9
-            ) or "Sin cambios"
-            live_rows.append(
-                {
-                    "País": name,
-                    "Enviado": "Sí",
-                    "Por": status_rows.get(cid, {}).get("submitted_by"),
-                    "Hora": status_rows.get(cid, {}).get("submitted_at"),
-                    "Δ TC (%)": float(item.get("fx_delta", 0.0)),
-                    "Δ gasto (%)": float(item.get("gov_delta", 0.0)),
-                    "Δ IVA (pp)": float(item.get("vat_delta", 0.0)),
-                    "Δ empleo público (%)": float(item.get("public_emp_delta", 0.0)),
-                    "Aranceles": tariffs_txt,
-                }
-            )
+        override = current_overrides.get(cid)
+        effective = combine_declared_and_override(item, override, required_cut=states_now[cid].get("required_gov_delta_next"))
+        player_tariffs_txt = ", ".join(
+            f"{country_map.get(int(k), k)}: {float(v):+.1f} pp"
+            for k, v in (item or {}).get("tariff_changes", {}).items()
+            if abs(float(v)) > 1e-9
+        ) or "Sin cambios"
+        admin_tariffs_txt = ", ".join(
+            f"{country_map.get(int(k), k)}: {float(v):+.1f} pp"
+            for k, v in (override or {}).get("tariff_changes", {}).items()
+            if abs(float(v)) > 1e-9
+        ) or "Sin shock"
+        effective_tariffs_txt = ", ".join(
+            f"{country_map.get(int(k), k)}: {float(v):+.1f} pp"
+            for k, v in effective.get("tariff_changes", {}).items()
+            if abs(float(v)) > 1e-9
+        ) or "Sin cambios"
+        live_rows.append(
+            {
+                "País": name,
+                "Jugador envió": "Sí" if item is not None else "No",
+                "Por": status_rows.get(cid, {}).get("submitted_by"),
+                "Hora": status_rows.get(cid, {}).get("submitted_at"),
+                "Shock admin": "Sí" if override is not None else "No",
+                "Δ TC jugador": float((item or {}).get("fx_delta", 0.0)),
+                "Δ TC shock": float((override or {}).get("fx_delta", 0.0)),
+                "Δ TC efectivo": float(effective.get("fx_delta", 0.0)),
+                "Δ gasto jugador": float((item or {}).get("gov_delta", 0.0)),
+                "Δ gasto shock": float((override or {}).get("gov_delta", 0.0)),
+                "Δ gasto efectivo": float(effective.get("gov_delta", 0.0)),
+                "Aranceles jugador": player_tariffs_txt,
+                "Aranceles shock": admin_tariffs_txt,
+                "Aranceles efectivos": effective_tariffs_txt,
+            }
+        )
     st.dataframe(pd.DataFrame(live_rows), use_container_width=True, hide_index=True)
 
     with st.expander("Editar parámetros del mundo activo"):
@@ -770,21 +790,21 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
         country_options = {c["name"]: c["id"] for c in countries}
         selected_country_name = st.selectbox("País a editar", list(country_options.keys()), key="admin_override_country")
         selected_country_id = int(country_options[selected_country_name])
-        current_submission = get_submissions_for_period(int(world["id"]), int(world["current_period"]))
-        existing = current_submission.get(selected_country_id, {})
+        current_overrides = get_admin_overrides_for_period(int(world["id"]), int(world["current_period"]))
+        existing_override = current_overrides.get(selected_country_id, {})
         limits = world["settings"]["limits"]
 
         with st.form("admin_override_form"):
             col1, col2 = st.columns(2)
             with col1:
-                fx_delta = st.number_input("Δ tipo de cambio (%)", value=float(existing.get("fx_delta", 0.0)), min_value=-float(limits["fx_delta_abs"]), max_value=float(limits["fx_delta_abs"]), step=0.5)
-                gov_delta = st.number_input("Δ gasto (%)", value=float(existing.get("gov_delta", 0.0)), min_value=-float(limits["gov_delta_abs"]), max_value=float(limits["gov_delta_abs"]), step=0.5)
+                fx_delta = st.number_input("Δ tipo de cambio (%)", value=float(existing_override.get("fx_delta", 0.0)), min_value=-float(limits["fx_delta_abs"]), max_value=float(limits["fx_delta_abs"]), step=0.5)
+                gov_delta = st.number_input("Δ gasto (%)", value=float(existing_override.get("gov_delta", 0.0)), min_value=-float(limits["gov_delta_abs"]), max_value=float(limits["gov_delta_abs"]), step=0.5)
             with col2:
-                vat_delta = st.number_input("Δ IVA (pp)", value=float(existing.get("vat_delta", 0.0)), min_value=-float(limits["vat_delta_abs"]), max_value=float(limits["vat_delta_abs"]), step=0.5)
-                public_emp_delta = st.number_input("Δ empleo público (%)", value=float(existing.get("public_emp_delta", 0.0)), min_value=-float(limits["public_emp_delta_abs"]), max_value=float(limits["public_emp_delta_abs"]), step=1.0)
+                vat_delta = st.number_input("Δ IVA (pp)", value=float(existing_override.get("vat_delta", 0.0)), min_value=-float(limits["vat_delta_abs"]), max_value=float(limits["vat_delta_abs"]), step=0.5)
+                public_emp_delta = st.number_input("Δ empleo público (%)", value=float(existing_override.get("public_emp_delta", 0.0)), min_value=-float(limits["public_emp_delta_abs"]), max_value=float(limits["public_emp_delta_abs"]), step=1.0)
 
             tariff_matrix = get_tariffs(int(world["id"]))
-            tariff_changes_existing = existing.get("tariff_changes", {})
+            tariff_changes_existing = existing_override.get("tariff_changes", {})
             tariff_changes: Dict[int, float] = {}
             for c in countries:
                 if int(c["id"]) == selected_country_id:
@@ -799,7 +819,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
                     key=f"admin_tariff_{selected_country_id}_{c['id']}"
                 )
 
-            save_override = st.form_submit_button("Guardar / sobrescribir política", use_container_width=True)
+            save_override = st.form_submit_button("Guardar shock oculto del administrador", use_container_width=True)
             if save_override:
                 final_vat = float(states := get_current_states(int(world["id"]))[selected_country_id]["vat_rate"]) + float(vat_delta)
                 invalid = False
@@ -814,7 +834,7 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
                         invalid = True
                         break
                 if not invalid:
-                    upsert_submission(
+                    upsert_admin_override(
                         world_id=int(world["id"]),
                         period_no=int(world["current_period"]),
                         country_id=selected_country_id,
@@ -825,16 +845,21 @@ def admin_current_world_panel(world: Dict[str, Any]) -> None:
                         public_emp_delta=float(public_emp_delta),
                         tariff_changes=tariff_changes,
                     )
-                    st.success("Política guardada.")
+                    st.success("Shock oculto del administrador guardado.")
                     st.rerun()
 
-        cols = st.columns([1, 1])
+        cols = st.columns([1, 1, 1])
         with cols[0]:
-            if st.button("Eliminar envío de este país", use_container_width=True):
+            if st.button("Eliminar envío del jugador", use_container_width=True):
                 clear_submission(int(world["id"]), int(world["current_period"]), selected_country_id)
-                st.success("Envío eliminado.")
+                st.success("Envío del jugador eliminado.")
                 st.rerun()
         with cols[1]:
+            if st.button("Eliminar shock oculto", use_container_width=True):
+                clear_admin_override(int(world["id"]), int(world["current_period"]), selected_country_id)
+                st.success("Shock oculto eliminado.")
+                st.rerun()
+        with cols[2]:
             states = get_current_states(int(world["id"]))
             required_now = states[selected_country_id]["required_gov_delta_next"]
             force_red = st.button(
@@ -979,14 +1004,14 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
                 "Variación del tipo de cambio (%)",
                 min_value=-float(limits["fx_delta_abs"]),
                 max_value=float(limits["fx_delta_abs"]),
-                value=float(existing.get("fx_delta", 0.0)),
+                value=float(existing_override.get("fx_delta", 0.0)),
                 step=0.5,
             )
             gov_delta = st.number_input(
                 "Variación del gasto estatal (%)",
                 min_value=-float(limits["gov_delta_abs"]),
                 max_value=float(limits["gov_delta_abs"]),
-                value=float(existing.get("gov_delta", 0.0)),
+                value=float(existing_override.get("gov_delta", 0.0)),
                 step=0.5,
             )
         with col2:
@@ -994,19 +1019,19 @@ def country_dashboard(user: Dict[str, Any], world: Dict[str, Any]) -> None:
                 "Cambio del IVA (pp)",
                 min_value=-float(limits["vat_delta_abs"]),
                 max_value=float(limits["vat_delta_abs"]),
-                value=float(existing.get("vat_delta", 0.0)),
+                value=float(existing_override.get("vat_delta", 0.0)),
                 step=0.5,
             )
             public_emp_delta = st.number_input(
                 "Variación del empleo público (%)",
                 min_value=-float(limits["public_emp_delta_abs"]),
                 max_value=float(limits["public_emp_delta_abs"]),
-                value=float(existing.get("public_emp_delta", 0.0)),
+                value=float(existing_override.get("public_emp_delta", 0.0)),
                 step=1.0,
             )
 
         st.markdown("#### Cambios de aranceles por socio")
-        tariff_changes_existing = existing.get("tariff_changes", {})
+        tariff_changes_existing = existing_override.get("tariff_changes", {})
         tariff_changes: Dict[int, float] = {}
         for c in countries:
             partner_id = int(c["id"])

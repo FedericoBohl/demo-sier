@@ -182,6 +182,32 @@ def initialize_db() -> None:
                 FOREIGN KEY(to_country_id) REFERENCES countries(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS admin_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                world_id INTEGER NOT NULL,
+                period_no INTEGER NOT NULL,
+                country_id INTEGER NOT NULL,
+                submitted_by_user_id INTEGER NOT NULL,
+                submitted_at TEXT NOT NULL,
+                fx_delta REAL NOT NULL,
+                gov_delta REAL NOT NULL,
+                vat_delta REAL NOT NULL,
+                public_emp_delta REAL NOT NULL,
+                UNIQUE(world_id, period_no, country_id),
+                FOREIGN KEY(world_id) REFERENCES worlds(id) ON DELETE CASCADE,
+                FOREIGN KEY(country_id) REFERENCES countries(id) ON DELETE CASCADE,
+                FOREIGN KEY(submitted_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_override_tariffs (
+                admin_override_id INTEGER NOT NULL,
+                to_country_id INTEGER NOT NULL,
+                tariff_delta REAL NOT NULL,
+                PRIMARY KEY(admin_override_id, to_country_id),
+                FOREIGN KEY(admin_override_id) REFERENCES admin_overrides(id) ON DELETE CASCADE,
+                FOREIGN KEY(to_country_id) REFERENCES countries(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS period_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 world_id INTEGER NOT NULL,
@@ -342,6 +368,70 @@ def get_submissions_for_period(
 
 
 
+def get_admin_overrides_for_period(
+    world_id: int,
+    period_no: int,
+    conn: sqlite3.Connection | None = None,
+) -> Dict[int, Dict[str, Any]]:
+    own_conn = False
+    if conn is None:
+        conn = get_connection()
+        own_conn = True
+    try:
+        overrides = {}
+        rows = conn.execute(
+            "SELECT * FROM admin_overrides WHERE world_id = ? AND period_no = ?",
+            (world_id, period_no),
+        ).fetchall()
+        for row in rows:
+            data = dict(row)
+            trows = conn.execute(
+                "SELECT to_country_id, tariff_delta FROM admin_override_tariffs WHERE admin_override_id = ?",
+                (row["id"],),
+            ).fetchall()
+            data["tariff_changes"] = {
+                int(tr["to_country_id"]): float(tr["tariff_delta"]) for tr in trows
+            }
+            overrides[int(row["country_id"])] = data
+        return overrides
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _empty_policy() -> Dict[str, Any]:
+    return {
+        "fx_delta": 0.0,
+        "gov_delta": 0.0,
+        "vat_delta": 0.0,
+        "public_emp_delta": 0.0,
+        "tariff_changes": {},
+    }
+
+
+def combine_declared_and_override(
+    declared: Dict[str, Any] | None,
+    override: Dict[str, Any] | None,
+    *,
+    required_cut: float | None = None,
+) -> Dict[str, Any]:
+    declared = declared or _empty_policy()
+    override = override or _empty_policy()
+    out = {
+        "fx_delta": float(declared.get("fx_delta", 0.0)) + float(override.get("fx_delta", 0.0)),
+        "gov_delta": float(declared.get("gov_delta", 0.0)) + float(override.get("gov_delta", 0.0)),
+        "vat_delta": float(declared.get("vat_delta", 0.0)) + float(override.get("vat_delta", 0.0)),
+        "public_emp_delta": float(declared.get("public_emp_delta", 0.0)) + float(override.get("public_emp_delta", 0.0)),
+        "tariff_changes": {},
+    }
+    partner_ids = set((declared.get("tariff_changes") or {}).keys()) | set((override.get("tariff_changes") or {}).keys())
+    for partner_id in partner_ids:
+        out["tariff_changes"][int(partner_id)] = float((declared.get("tariff_changes") or {}).get(partner_id, 0.0)) + float((override.get("tariff_changes") or {}).get(partner_id, 0.0))
+    if required_cut is not None and float(out["gov_delta"]) > float(required_cut):
+        out["gov_delta"] = float(required_cut)
+    return out
+
+
 def period_submission_status(world_id: int, period_no: int) -> List[Dict[str, Any]]:
     conn = get_connection()
     try:
@@ -367,6 +457,8 @@ def period_submission_status(world_id: int, period_no: int) -> List[Dict[str, An
 
 # ---------- configuración y creación de mundo ----------
 def reset_world_and_users_except_admin(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM admin_override_tariffs")
+    conn.execute("DELETE FROM admin_overrides")
     conn.execute("DELETE FROM submission_tariffs")
     conn.execute("DELETE FROM submissions")
     conn.execute("DELETE FROM period_results")
@@ -608,6 +700,84 @@ def clear_submission(world_id: int, period_no: int, country_id: int) -> None:
             conn.execute("DELETE FROM submissions WHERE id = ?", (row["id"],))
 
 
+def upsert_admin_override(
+    *,
+    world_id: int,
+    period_no: int,
+    country_id: int,
+    submitted_by_user_id: int,
+    fx_delta: float,
+    gov_delta: float,
+    vat_delta: float,
+    public_emp_delta: float,
+    tariff_changes: Dict[int, float],
+) -> None:
+    with transaction() as conn:
+        existing = conn.execute(
+            "SELECT id FROM admin_overrides WHERE world_id = ? AND period_no = ? AND country_id = ?",
+            (world_id, period_no, country_id),
+        ).fetchone()
+        now_str = dt_to_str(utcnow())
+        if existing is None:
+            cur = conn.execute(
+                """
+                INSERT INTO admin_overrides (
+                    world_id, period_no, country_id, submitted_by_user_id, submitted_at,
+                    fx_delta, gov_delta, vat_delta, public_emp_delta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    world_id,
+                    period_no,
+                    country_id,
+                    submitted_by_user_id,
+                    now_str,
+                    fx_delta,
+                    gov_delta,
+                    vat_delta,
+                    public_emp_delta,
+                ),
+            )
+            override_id = int(cur.lastrowid)
+        else:
+            override_id = int(existing["id"])
+            conn.execute(
+                """
+                UPDATE admin_overrides
+                   SET submitted_by_user_id = ?, submitted_at = ?, fx_delta = ?, gov_delta = ?,
+                       vat_delta = ?, public_emp_delta = ?
+                 WHERE id = ?
+                """,
+                (
+                    submitted_by_user_id,
+                    now_str,
+                    fx_delta,
+                    gov_delta,
+                    vat_delta,
+                    public_emp_delta,
+                    override_id,
+                ),
+            )
+            conn.execute("DELETE FROM admin_override_tariffs WHERE admin_override_id = ?", (override_id,))
+
+        for to_country_id, delta in tariff_changes.items():
+            conn.execute(
+                "INSERT INTO admin_override_tariffs (admin_override_id, to_country_id, tariff_delta) VALUES (?, ?, ?)",
+                (override_id, int(to_country_id), float(delta)),
+            )
+
+
+def clear_admin_override(world_id: int, period_no: int, country_id: int) -> None:
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT id FROM admin_overrides WHERE world_id = ? AND period_no = ? AND country_id = ?",
+            (world_id, period_no, country_id),
+        ).fetchone()
+        if row:
+            conn.execute("DELETE FROM admin_override_tariffs WHERE admin_override_id = ?", (row["id"],))
+            conn.execute("DELETE FROM admin_overrides WHERE id = ?", (row["id"],))
+
+
 # ---------- finalización de período ----------
 def _all_countries_submitted(conn: sqlite3.Connection, world_id: int, period_no: int) -> bool:
     total = conn.execute("SELECT COUNT(*) FROM countries WHERE world_id = ?", (world_id,)).fetchone()[0]
@@ -658,31 +828,29 @@ def _finalize_period_locked(conn: sqlite3.Connection, world: Dict[str, Any]) -> 
     states = get_current_states(world_id, conn=conn)
     tariffs = get_tariffs(world_id, conn=conn)
     submissions = get_submissions_for_period(world_id, period_no, conn=conn)
+    admin_overrides = get_admin_overrides_for_period(world_id, period_no, conn=conn)
 
     default_policies: Dict[int, Dict[str, Any]] = {}
     for country in countries:
         cid = int(country["id"])
         submission = submissions.get(cid)
-        if submission is None:
-            default_policies[cid] = {
-                "fx_delta": 0.0,
-                "gov_delta": 0.0,
-                "vat_delta": 0.0,
-                "public_emp_delta": 0.0,
-                "tariff_changes": {},
-            }
-        else:
-            default_policies[cid] = {
-                "fx_delta": float(submission["fx_delta"]),
-                "gov_delta": float(submission["gov_delta"]),
-                "vat_delta": float(submission["vat_delta"]),
-                "public_emp_delta": float(submission["public_emp_delta"]),
-                "tariff_changes": submission.get("tariff_changes", {}),
-            }
-
+        declared = None if submission is None else {
+            "fx_delta": float(submission["fx_delta"]),
+            "gov_delta": float(submission["gov_delta"]),
+            "vat_delta": float(submission["vat_delta"]),
+            "public_emp_delta": float(submission["public_emp_delta"]),
+            "tariff_changes": submission.get("tariff_changes", {}),
+        }
+        override = admin_overrides.get(cid)
+        hidden = None if override is None else {
+            "fx_delta": float(override["fx_delta"]),
+            "gov_delta": float(override["gov_delta"]),
+            "vat_delta": float(override["vat_delta"]),
+            "public_emp_delta": float(override["public_emp_delta"]),
+            "tariff_changes": override.get("tariff_changes", {}),
+        }
         required_cut = states[cid].get("required_gov_delta_next")
-        if required_cut is not None and float(default_policies[cid]["gov_delta"]) > float(required_cut):
-            default_policies[cid]["gov_delta"] = float(required_cut)
+        default_policies[cid] = combine_declared_and_override(declared, hidden, required_cut=required_cut)
 
     next_states = compute_next_period(
         countries=countries,
